@@ -4,6 +4,7 @@ import os
 import random
 import time
 import warnings
+from abc import ABC
 from base64 import b64encode, b64decode
 from pathlib import Path
 
@@ -60,14 +61,19 @@ def needs_registry(method):
     return inner
 
 
-class BaseCloudNodeConfigurator:
+class BaseCloudNodeConfigurator(ABC):
 
     NAMESSPACE_CREATE_ACTIONS = ['add', 'create', 'copy']
-    
+
+    DEFAULT_CONFIG_DATATYPES = ['envvars', 'cliargs']
+
+    host_level_override_prompts = {}
+
+    required_fields = []
+
     def __init__(self,  # TODO: Add type annotations
                  emitter,
-                 seed_network=None,
-                 recovery_mode = False,
+                 recovery_mode=False,
                  pre_config=False,
                  network=None,
                  namespace=None,
@@ -75,8 +81,6 @@ class BaseCloudNodeConfigurator:
                  envvars=None,
                  cliargs=None,
                  resource_name=None,
-                 eth_provider=None,
-                 docker_image=None,
                  **kwargs
                  ):
 
@@ -140,39 +144,24 @@ class BaseCloudNodeConfigurator:
             self.namespace_network = f'{self.network}-{self.namespace}-{maya.now().date.isoformat()}'
             self.config = {
                 "namespace": self.namespace_network,
-                "keystorepassword": b64encode(os.urandom(64)).decode('utf-8'),
                 "ethpassword": b64encode(os.urandom(64)).decode('utf-8'),
                 'instances': {},
-                'eth_provider': eth_provider,
-                'docker_image': docker_image
+                'eth_provider': self.kwargs.get('eth_provider'),
+                'docker_image': self.kwargs.get('docker_image')
             }
             self._write_config()
 
-        if not self.config.get('keystoremnemonic'):
-            wallet = keygen.generate()
-            self.config['keystoremnemonic'] = wallet.mnemonic()
-            self.alert_new_mnemonic(wallet)
-            self._write_config()
+        self._additional_config_init(self.kwargs)
+
         # configure provider specific attributes
         self._configure_provider_params()
 
         # if certain config options have been specified with this invocation,
         # save these to update host specific variables before deployment
         # to allow for individual host config differentiation
-        self.host_level_overrides = {k: v for k, v in {
-            'eth_provider': eth_provider,
-            'payment_provider': self.kwargs.get('payment_provider'),
-            'docker_image': docker_image,
-            'payment_network':  self.kwargs.get('payment_network'),
-        }.items() if k in self.required_fields}
-
-        self.config['seed_network'] = seed_network if seed_network is not None else self.config.get(
-            'seed_network')
-        if not self.config['seed_network']:
-            self.config.pop('seed_node', None)
-
-        if self.kwargs.get('payment_network'):
-            self.config['payment_network'] = self.kwargs.get('payment_network')
+        self.host_level_overrides = {}
+        for k in self.required_fields:
+            self.host_level_overrides[k] = self.kwargs.get(k)
 
         # add instance key as host_nickname for use in inventory
         if self.config.get('instances'):
@@ -180,6 +169,28 @@ class BaseCloudNodeConfigurator:
                 self.config['instances'][k]['host_nickname'] = k
 
         self._write_config()
+
+    @property
+    def _provider_deploy_attrs(self):
+        raise NotImplementedError
+
+    def _configure_provider_params(self):
+        raise NotImplementedError
+
+    def _do_setup_for_instance_creation(self):
+        raise NotImplementedError
+
+    def _destroy_resources(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def _print_host_data(self, host_data):
+        pass
+
+    def _additional_config_init(self, **kwargs):
+        pass
+
+    def create_new_node(self, node_name):
+        raise NotImplementedError
 
     def _write_config(self):
         config_dir = self.config_path.parent
@@ -197,10 +208,6 @@ class BaseCloudNodeConfigurator:
         return Path(DEFAULT_CONFIG_ROOT).joinpath(NODE_CONFIG_STORAGE_KEY, self.network)
 
     @property
-    def _provider_deploy_attrs(self):
-        return []
-
-    @property
     def backup_directory(self):
         return f'{self.config_dir}/remote_operator_backups/'
 
@@ -208,19 +215,13 @@ class BaseCloudNodeConfigurator:
     def has_wallet(self):
         return self.config.get('local_wallet_keystore') is not None
 
-    def _configure_provider_params(self):
-        pass
-
-    def _do_setup_for_instance_creation(self):
-        pass
-
     def _format_runtime_options(self, node_options):
         node_options.update({'network': self.network})
         return ' '.join([f'--{name} {value}' for name, value in node_options.items()])
 
     @property
     def chain_id(self):
-        return NETWORKS[self.network]['policy']
+        return NETWORKS[self.network]
 
     @property
     def chain_name(self):
@@ -228,31 +229,21 @@ class BaseCloudNodeConfigurator:
             return CHAIN_NAMES[self.chain_id].lower()
         except KeyError:
             self.emitter.echo(
-                f"could not identify public blockchain for {self.network}", color="red")
+                f"could not identify public blockchain for '{self.network}'", color="red")
 
     @property
     def inventory_path(self):
         return str(Path(DEFAULT_CONFIG_ROOT).joinpath(NODE_CONFIG_STORAGE_KEY, f'{self.namespace_network}.ansible_inventory.yml'))
 
     def default_config(self):
-        defaults = {
-            'envvars':
-                [
-                    (NUCYPHER_ENVVAR_KEYSTORE_PASSWORD,
-                     self.config['keystorepassword']),
-                    (NUCYPHER_ENVVAR_OPERATOR_ETHEREUM_PASSWORD,
-                     self.config['ethpassword']),
+        """empty default config"""
+        defaults = {}
+        for k in self.DEFAULT_CONFIG_DATATYPES:
+            defaults[k] = []
 
-                    ("OPERATOR_ETHEREUM_PASSWORD",  # TODO: Remove this (it's for backwards compatibility)
-                     self.config['ethpassword']),
-
-                ],
-            'cliargs': []
-        }
         return defaults
 
     def update_generate_inventory(self, node_names, generate_keymaterial=False, **kwargs):
-
         # filter out the nodes we will not be dealing with
         nodes = {key: value for key,
                  value in self.config['instances'].items() if key in node_names}
@@ -266,8 +257,7 @@ class BaseCloudNodeConfigurator:
             keypairs = list(keygen.derive(
                 wallet, quantity=self.instance_count))
 
-        for datatype in ['envvars', 'cliargs']:
-
+        for datatype in self.DEFAULT_CONFIG_DATATYPES:
             data_key = f'runtime_{datatype}'
 
             input_data = [(k, v) for k, v in getattr(self, datatype)]
@@ -431,9 +421,6 @@ class BaseCloudNodeConfigurator:
                     self.emitter.echo(
                         f"deleted all requested resources for {self.provider_name}.  We are clean.  No money is being spent.", color="green")
 
-    def _destroy_resources(self, *args, **kwargs):
-        raise NotImplementedError
-
     def recover_instance_config(self, instance_data, config_filepath=None):
         if not self.recovery_mode:
             raise ValueError("Don't call function unless in recovery mode")
@@ -514,51 +501,8 @@ class BaseCloudNodeConfigurator:
             f"\t{node_name}: {host_data['publicaddress']}")
         self.emitter.echo(
             f"\t\t {dep.format_ssh_cmd(host_data)}", color="yellow")
-        if host_data.get('operator address'):
-            self.emitter.echo(
-                f"\t\t operator address: {host_data['operator address']}")
-            if self.config.get('local_blockchain_provider'):
-                wallet_balance = self.get_wallet_balance(
-                    host_data['operator address'], eth=True)
-                self.emitter.echo(
-                    f"\t\t operator ETH balance: {wallet_balance}"
-                )
-                staking_provider = None
-                try:
-                    staking_provider = self.get_staking_provider(
-                        host_data['operator address'])
-                    self.emitter.echo(
-                        f"\t\t staking provider address: {staking_provider}")
-                    if staking_provider:
-                        # if we have a staking provider, lets check if the node is confirmed
-                        is_confirmed = self.check_is_confirmed(
-                            host_data['operator address'])
-                        self.emitter.echo(
-                            f"\t\t operator confirmed: {is_confirmed}")
-                        stake_amount = self.get_stake_amount(staking_provider)
-                        self.emitter.echo(
-                            f"\t\t staked amount: {stake_amount:,}")
-                        if is_confirmed:
-                            # if the node is confirmed, we should be able to query it
-                            try:
-                                node_response = self.query_active_node(
-                                    host_data['publicaddress'])
-                                self.emitter.echo("\t\t active node status:")
-                                self.emitter.echo(
-                                    f"\t\t\tnickname: {node_response['nickname']['text']}")
-                                self.emitter.echo(
-                                    f"\t\t\trest url: {node_response['rest_url']}")
-                                self.emitter.echo(
-                                    f"\t\t\tknown nodes: {len(node_response['known_nodes'])}")
-                                self.emitter.echo(
-                                    f"\t\t\tfleet state: {len(node_response['fleet_state'])}")
-                            except Exception as e:
-                                print(e)
-                except Exception as e:
-                    raise e
-                if not staking_provider:
-                    self.emitter.echo(
-                        f"\t\t staking provider: NOT BOUND TO STAKING PROVIDER")
+
+        self._print_host_data(host_data)
 
     def format_ssh_cmd(self, host_data):
 
@@ -588,16 +532,15 @@ class BaseCloudNodeConfigurator:
         self.alert_new_mnemonic(wallet)
 
     def remove_resources(self, hostnames):
-        for host in hostnames:
-            existing_instances = {k: v for k, v in self.config.get(
-                'instances', {}).items() if k in hostnames}
-            if existing_instances:
-                for node_name, instance in existing_instances.items():
-                    self.emitter.echo(
-                        f"removing instance data for {node_name} in 3 seconds...", color='red')
-                    time.sleep(3)
-                    del self.config['instances'][node_name]
-                    self._write_config()
+        existing_instances = {k: v for k, v in self.config.get(
+            'instances', {}).items() if k in hostnames}
+        if existing_instances:
+            for node_name, instance in existing_instances.items():
+                self.emitter.echo(
+                    f"removing instance data for {node_name} in 3 seconds...", color='red')
+                time.sleep(3)
+                del self.config['instances'][node_name]
+                self._write_config()
 
     def get_local_blockchain_provider(self):
         if not self.config.get('local_blockchain_provider'):
@@ -609,7 +552,6 @@ class BaseCloudNodeConfigurator:
         return self.config.get('local_blockchain_provider')
 
     def get_or_create_local_wallet(self, password):
-
         try:
             import web3
         except ImportError:
@@ -636,30 +578,6 @@ class BaseCloudNodeConfigurator:
             return web3.fromWei(balance, 'ether')
         return balance
 
-    @needs_registry
-    @needs_provider
-    def get_staking_provider(self, web3, contracts, address):
-        contract_address, abi = contracts['SimplePREApplication']
-        contract = web3.eth.contract(abi=abi, address=contract_address)
-        return contract.functions.stakingProviderFromOperator(address).call()
-
-    @needs_registry
-    @needs_provider
-    def check_is_confirmed(self, web3, contracts, address):
-        contract_address, abi = contracts['SimplePREApplication']
-        contract = web3.eth.contract(abi=abi, address=contract_address)
-        return contract.functions.isOperatorConfirmed(address).call()
-
-    @needs_registry
-    @needs_provider
-    def get_stake_amount(self, web3, contracts, address):
-        contract_address, abi = contracts['SimplePREApplication']
-        contract = web3.eth.contract(abi=abi, address=contract_address)
-        balance = contract.functions.authorizedStake(address).call()
-        return int(web3.fromWei(balance, 'ether'))
-
-    def query_active_node(self, public_address):
-        return requests.get(f"https://{public_address}:9151/status/?json=true", verify=False).json()
 
     @needs_provider
     def fund_nodes(self, web3, wallet, node_names, amount):
@@ -811,6 +729,9 @@ class DigitalOceanConfigurator(BaseCloudNodeConfigurator):
             {'key': 'default_user', 'value': 'root'},
         ]
 
+    def _do_setup_for_instance_creation(self):
+        pass
+
     def _configure_provider_params(self):
 
         self.token = self.config.get('digital-ocean-access-token')
@@ -897,7 +818,7 @@ class DigitalOceanConfigurator(BaseCloudNodeConfigurator):
 
         else:
             self.emitter.echo(response.text, color='red')
-            raise BaseException("Error creating resources in DigitalOcean")
+            raise Exception("Error creating resources in DigitalOcean")
 
     def _destroy_resources(self, node_names):
 
@@ -1366,6 +1287,9 @@ class GenericConfigurator(BaseCloudNodeConfigurator):
 
 class GenericDeployer(BaseCloudNodeConfigurator):
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
     def deploy(self, node_names):
 
         playbook = Path(PLAYBOOKS).joinpath(self.playbook_name)
@@ -1592,9 +1516,118 @@ class UrsulaDeployer(GenericDeployer):
         'nickname': []
     }
 
+    def __init__(self, seed_network=None, *args, **kwargs):
+        super().__init__(seed_network=seed_network, *args, **kwargs)
+
+    def _additional_config_init(self, **kwargs):
+        if not self.config.get('keystorepassword'):
+            self.config["keystorepassword"] = b64encode(os.urandom(64)).decode('utf-8')
+
+        if not self.config.get('keystoremnemonic'):
+            wallet = keygen.generate()
+            self.config['keystoremnemonic'] = wallet.mnemonic()
+            self.alert_new_mnemonic(wallet)
+
+        seed_network = kwargs.get('seed_network')
+        self.config['seed_network'] = seed_network if seed_network is not None else self.config.get(
+            'seed_network')
+        if not self.config['seed_network']:
+            self.config.pop('seed_node', None)
+
+        if kwargs.get('payment_network'):
+            self.config['payment_network'] = kwargs.get('payment_network')
+
+        self._write_config()
+
+    @needs_registry
+    @needs_provider
+    def _get_staking_provider(self, web3, contracts, address):
+        contract_address, abi = contracts['SimplePREApplication']
+        contract = web3.eth.contract(abi=abi, address=contract_address)
+        return contract.functions.stakingProviderFromOperator(address).call()
+
+    @needs_registry
+    @needs_provider
+    def _check_is_confirmed(self, web3, contracts, address):
+        contract_address, abi = contracts['SimplePREApplication']
+        contract = web3.eth.contract(abi=abi, address=contract_address)
+        return contract.functions.isOperatorConfirmed(address).call()
+
+    @needs_registry
+    @needs_provider
+    def _get_stake_amount(self, web3, contracts, address):
+        contract_address, abi = contracts['SimplePREApplication']
+        contract = web3.eth.contract(abi=abi, address=contract_address)
+        balance = contract.functions.authorizedStake(address).call()
+        return int(web3.fromWei(balance, 'ether'))
+
+    def _query_active_node(self, public_address):
+        return requests.get(f"https://{public_address}:9151/status/?json=true", verify=False).json()
+
+    def _print_host_data(self, host_data):
+        if host_data.get('operator address'):
+            self.emitter.echo(
+                f"\t\t operator address: {host_data['operator address']}")
+            if self.config.get('local_blockchain_provider'):
+                wallet_balance = self.get_wallet_balance(
+                    host_data['operator address'], eth=True)
+                self.emitter.echo(
+                    f"\t\t operator ETH balance: {wallet_balance}"
+                )
+                staking_provider = None
+                try:
+                    staking_provider = self._get_staking_provider(
+                        host_data['operator address'])
+                    self.emitter.echo(
+                        f"\t\t staking provider address: {staking_provider}")
+                    if staking_provider:
+                        # if we have a staking provider, lets check if the node is confirmed
+                        is_confirmed = self._check_is_confirmed(
+                            host_data['operator address'])
+                        self.emitter.echo(
+                            f"\t\t operator confirmed: {is_confirmed}")
+                        stake_amount = self._get_stake_amount(staking_provider)
+                        self.emitter.echo(
+                            f"\t\t staked amount: {stake_amount:,}")
+                        if is_confirmed:
+                            # if the node is confirmed, we should be able to query it
+                            try:
+                                node_response = self._query_active_node(
+                                    host_data['publicaddress'])
+                                self.emitter.echo("\t\t active node status:")
+                                self.emitter.echo(
+                                    f"\t\t\tnickname: {node_response['nickname']['text']}")
+                                self.emitter.echo(
+                                    f"\t\t\trest url: {node_response['rest_url']}")
+                                self.emitter.echo(
+                                    f"\t\t\tknown nodes: {len(node_response['known_nodes'])}")
+                                self.emitter.echo(
+                                    f"\t\t\tfleet state: {len(node_response['fleet_state'])}")
+                            except Exception as e:
+                                print(e)
+                except Exception as e:
+                    raise e
+                if not staking_provider:
+                    self.emitter.echo(
+                        f"\t\t staking provider: NOT BOUND TO STAKING PROVIDER")
+
     @property
     def user(self) -> str:
         return 'nucypher'
+
+    def default_config(self):
+        defaults = {
+            'envvars':
+                [
+                    (NUCYPHER_ENVVAR_KEYSTORE_PASSWORD,
+                     self.config['keystorepassword']),
+                    (NUCYPHER_ENVVAR_OPERATOR_ETHEREUM_PASSWORD,
+                     self.config['ethpassword']),
+
+                ],
+            'cliargs': []
+        }
+        return defaults
 
     def migrate_5_6(self):
         for index, instance in enumerate(self.config['instances'].keys()):

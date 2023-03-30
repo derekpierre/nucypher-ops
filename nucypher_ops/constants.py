@@ -27,11 +27,11 @@ CHAIN_NAMES = {
 REVERSE_LOOKUP_CHAIN_NAMES = {v: k for k, v in CHAIN_NAMES.items()}
 
 NETWORKS = {
-    'mainnet': {'policy': MAINNET, 'payment': POLYGON_MAINNET},
-    'lynx': {'policy': GOERLI, 'payment': POLYGON_MUMBAI},
-    'tapir': {'policy': GOERLI, 'payment': POLYGON_MUMBAI},
-    'test': {'policy': GOERLI, 'payment': POLYGON_MUMBAI},
-    'oryx': {'policy': GOERLI, 'payment': POLYGON_MAINNET}
+    'mainnet': MAINNET,
+    'lynx': GOERLI,
+    'tapir': GOERLI,
+    'test': GOERLI,
+    'oryx': GOERLI,
 }
 
 PAYMENT_NETWORKS = ('polygon', 'mumbai')
