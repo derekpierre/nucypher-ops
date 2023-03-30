@@ -63,27 +63,7 @@ def needs_registry(method):
 class BaseCloudNodeConfigurator:
 
     NAMESSPACE_CREATE_ACTIONS = ['add', 'create', 'copy']
-    application = 'ursula'
-    required_fields = [
-        'eth_provider',
-        'payment_provider',
-        'docker_image',
-        'payment_network'
-    ]
-
-    host_level_override_prompts = {
-        'eth_provider': {"prompt": "--eth-provider: please provide the url of a hosted ethereum node (infura/geth) which your nodes can access", "choices": None},
-        'payment_provider': {"prompt": "--payment-provider: please provide the url of a hosted level-two node (infura/bor) which your nodes can access", "choices": None},
-        'payment_network':  {"prompt": f'--payment-network:  choose a payment network from: {PAYMENT_NETWORK_CHOICES}', "choices": PAYMENT_NETWORKS},
-    }
-
-    output_capture = {
-        'operator address': [],
-        'rest url': [],
-        'nucypher version': [],
-        'nickname': []
-    }
-
+    
     def __init__(self,  # TODO: Add type annotations
                  emitter,
                  seed_network=None,
