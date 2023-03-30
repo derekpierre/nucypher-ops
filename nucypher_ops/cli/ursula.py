@@ -11,8 +11,7 @@ from nucypher_ops.cli.recover_utils import (
     compare_and_remove_common_namespace_data,
     add_deploy_attributes,
     get_aws_instance_info,
-    get_aws_internet_gateway_info,
-    get_aws_route_table_info, collect_aws_pre_config_data
+    collect_aws_pre_config_data
 )
 from nucypher_ops.constants import DEFAULT_NAMESPACE, DEFAULT_NETWORK, PLAYBOOKS
 from nucypher_ops.ops.ansible_utils import AnsiblePlayBookResultsCollector
@@ -43,7 +42,7 @@ def deploy(payment_network, payment_provider, eth_provider, nucypher_image, seed
            namespace, network, include_hosts, envvars, cliargs):
     """Deploys NuCypher on managed hosts."""
 
-    deployer = CloudDeployers.get_deployer('generic')(emitter,
+    deployer = CloudDeployers.get_deployer('ursula')(emitter,
                                                       seed_network=seed_network,
                                                       namespace=namespace,
                                                       network=network,
@@ -62,7 +61,7 @@ def deploy(payment_network, payment_provider, eth_provider, nucypher_image, seed
     for name, hostdata in [(n, d) for n, d in deployer.config['instances'].items() if n in hostnames]:
         emitter.echo(f'\t{name}: {hostdata["publicaddress"]}', color="yellow")
     os.environ['ANSIBLE_HOST_KEY_CHECKING'] = 'False'
-    deployer.deploy_nucypher_on_existing_nodes(
+    deployer.deploy_nucypher(
         hostnames, migrate_nucypher=migrate, init=init)
 
 
@@ -74,9 +73,9 @@ def deploy(payment_network, payment_provider, eth_provider, nucypher_image, seed
 @click.option('--env', '-e', 'envvars', help="environment variables (ENVVAR=VALUE)", multiple=True, type=click.STRING, default=[])
 @click.option('--cli', '-c', 'cliargs', help="cli arguments for 'nucypher run': eg.'--max-gas-price 50'/'--c max-gas-price=50'", multiple=True, type=click.STRING, default=[])
 def update(nucypher_image, namespace, network, include_hosts, envvars, cliargs):
-    """Update images and change cli/env options on already running hosts"""
+    """Update images and change cli/env options for ursula(s) on already running hosts"""
 
-    deployer = CloudDeployers.get_deployer('generic')(emitter,
+    deployer = CloudDeployers.get_deployer('ursula')(emitter,
                                                       namespace=namespace,
                                                       network=network,
                                                       envvars=envvars,
@@ -91,7 +90,7 @@ def update(nucypher_image, namespace, network, include_hosts, envvars, cliargs):
     for name, hostdata in [(n, d) for n, d in deployer.config['instances'].items() if n in hostnames]:
         emitter.echo(f'\t{name}: {hostdata["publicaddress"]}', color="yellow")
     os.environ['ANSIBLE_HOST_KEY_CHECKING'] = 'False'
-    deployer.update_nucypher_on_existing_nodes(hostnames)
+    deployer.update_nucypher(hostnames)
 
 
 @cli.command('status')
@@ -102,14 +101,14 @@ def update(nucypher_image, namespace, network, include_hosts, envvars, cliargs):
 def status(fast, namespace, network, include_hosts):
     """Displays ursula status and updates worker data in stakeholder config"""
 
-    deployer = CloudDeployers.get_deployer('generic')(
+    deployer = CloudDeployers.get_deployer('ursula')(
         emitter, namespace=namespace, network=network)
 
     hostnames = deployer.config['instances'].keys()
     if include_hosts:
         hostnames = include_hosts
 
-    deployer.get_worker_status(hostnames, fast=fast)
+    deployer.get_ursula_status(hostnames, fast=fast)
 
 
 @cli.command('fund')
@@ -119,10 +118,10 @@ def status(fast, namespace, network, include_hosts):
 @click.option('--include-host', 'include_hosts', help="Peform this operation on only the named hosts", multiple=True, type=click.STRING)
 def fund(amount, namespace, network, include_hosts):
     """
-    fund remote nodes automatically using a locally managed burner wallet
+    fund remote ursula(s) automatically using a locally managed burner wallet
     """
     
-    deployer = CloudDeployers.get_deployer('generic')(emitter, namespace=namespace, network=network)
+    deployer = CloudDeployers.get_deployer('ursula')(emitter, namespace=namespace, network=network)
 
     if deployer.has_wallet:
         if password := os.getenv('NUCYPHER_OPS_LOCAL_ETH_PASSWORD'):
@@ -164,7 +163,7 @@ def fund(amount, namespace, network, include_hosts):
 @click.option('--include-host', 'include_hosts', help="Peform this operation on only the named hosts", multiple=True, type=click.STRING)
 def defund(amount, to_address, namespace, network, include_hosts):
     """Transfer remaining ETH balance from operator address to another address"""
-    deployer = CloudDeployers.get_deployer('generic')(emitter, namespace=namespace, network=network)
+    deployer = CloudDeployers.get_deployer('ursula')(emitter, namespace=namespace, network=network)
 
     hostnames = deployer.config['instances'].keys()
     if include_hosts:
@@ -179,7 +178,7 @@ def defund(amount, to_address, namespace, network, include_hosts):
 @click.option('--network', help="The Nucypher network name these hosts will run on.", type=click.STRING, default=DEFAULT_NETWORK)
 def backupdir(verbose, namespace, network):
     """Display backup directory for hosts within network and namespace"""
-    deployer = CloudDeployers.get_deployer('generic')(emitter, namespace=namespace, network=network)
+    deployer = CloudDeployers.get_deployer('ursula')(emitter, namespace=namespace, network=network)
     hostnames = deployer.config['instances'].keys()
     for hostname in hostnames:   
         prefix = f'{hostname}:' if verbose else ''
@@ -193,13 +192,13 @@ def backupdir(verbose, namespace, network):
 @click.option('--source-path', 'source_path', help="The absolute path on disk to the backup data you are restoring", type=click.STRING, required=False)
 @click.option('--source-nickname', 'source_nickname', help="The nickname of the node whose data you are moving to the new machine", type=click.STRING, required=False)
 def restore(namespace, network, target_host, source_path, source_nickname):
-    """Restores a backup of a worker to an existing host"""
+    """Restores a backup of an ursula to an existing host"""
     if not source_path and not source_nickname:
         emitter.echo("You must either specify the path to a backup on disk (ie. `/Users/Alice/Library/Application Support/nucypher-ops/configs/), or the name of an existing ursula config (ie. `mainnet-nucypher-1`")
 
-    deployer = CloudDeployers.get_deployer('generic')(emitter, namespace=namespace, network=network)
+    deployer = CloudDeployers.get_deployer('ursula')(emitter, namespace=namespace, network=network)
 
-    deployer.restore_from_backup(target_host, source_path)
+    deployer.restore_ursula_from_backup(target_host, source_path)
 
 
 @cli.command('backup')
@@ -207,14 +206,14 @@ def restore(namespace, network, target_host, source_path, source_nickname):
 @click.option('--network', help="The Nucypher network name these hosts are running on.", type=click.STRING, default=DEFAULT_NETWORK)
 @click.option('--include-host', help="The nickname of the host to backup", multiple=False, type=click.STRING, required=False)
 def backup(namespace, network, include_host):
-    """Stores a backup of a worker running on an existing host"""
-    deployer = CloudDeployers.get_deployer('generic')(emitter, namespace=namespace, network=network)
+    """Stores a backup of ursula(s) running on existing host(s)"""
+    deployer = CloudDeployers.get_deployer('ursula')(emitter, namespace=namespace, network=network)
     if include_host:
         hostnames = [include_host]
     else:
         hostnames = deployer.config['instances'].keys()
 
-    deployer.backup_remote_data(node_names=hostnames)
+    deployer.backup_ursula_data(node_names=hostnames)
 
 
 @cli.command('stop')
@@ -222,14 +221,14 @@ def backup(namespace, network, include_host):
 @click.option('--network', help="The Nucypher network name these hosts are running on.", type=click.STRING, default=DEFAULT_NETWORK)
 @click.option('--include-host', help="The nickname of the host to backup", multiple=False, type=click.STRING, required=False)
 def stop(namespace, network, include_host):
-    """Stop worker running on an existing host"""
-    deployer = CloudDeployers.get_deployer('generic')(emitter, namespace=namespace, network=network)
+    """Stop ursula(s) running on an existing host(s)"""
+    deployer = CloudDeployers.get_deployer('ursula')(emitter, namespace=namespace, network=network)
     if include_host:
         hostnames = [include_host]
     else:
         hostnames = deployer.config['instances'].keys()
 
-    deployer.stop_worker_process(node_names=hostnames)
+    deployer.stop_ursula(node_names=hostnames)
 
 
 @cli.command('recover-node-config')
@@ -241,7 +240,7 @@ def stop(namespace, network, include_host):
 @click.option('--key-path', 'ssh_key_path', help="The path to a keypair we will need to ssh into this host (default: ~/.ssh/id_rsa)", default="~/.ssh/id_rsa")
 @click.option('--ssh-port', help="The port this host's ssh daemon is listening on (default: 22)", default=22)
 def recover_node_config(include_hosts, namespace, provider, aws_profile, login_name, ssh_key_path, ssh_port):
-    """Regenerate previously lost/deleted node config(s)"""
+    """Regenerate previously lost/deleted ursula config(s)"""
 
     if (provider == 'aws') ^ bool(aws_profile):
         raise click.BadOptionUsage('--aws-profile', f"Expected both '--aws-profile <profile>' and '--provider aws' to be specified; got ({aws_profile}, {provider})")

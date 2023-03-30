@@ -201,10 +201,6 @@ class BaseCloudNodeConfigurator:
 
         self._write_config()
 
-    @property
-    def user(self) -> str:
-        return 'nucypher'
-
     def _write_config(self):
         config_dir = self.config_path.parent
         config_dir.mkdir(parents=True, exist_ok=True)
@@ -402,224 +398,6 @@ class BaseCloudNodeConfigurator:
                         self.config['instances'][node_name][k] = input_values[k]
 
                 self._write_config()
-
-    def deploy_nucypher_on_existing_nodes(self, node_names, migrate_nucypher=False, init=False, **kwargs):
-
-        if migrate_nucypher or init:
-            keep_going = self.emitter.prompt(
-                "Proceeding with this operation will delete information from your nodes including wallets and keys.  Are you sure? (type 'yes')") == 'yes'
-            if init:
-                keep_going = self.emitter.prompt(
-                    "Proceeding with this operation will delete your node's eth wallet so make sure it does not posses any significant funds... Are you sure? (type 'yes')") == 'yes'
-            if not keep_going:
-                return
-            if migrate_nucypher:
-                self.migrate(**kwargs)
-
-        playbook = Path(PLAYBOOKS).joinpath('setup_remote_workers.yml')
-
-        self.configure_host_level_overrides(node_names)
-
-        if self.created_new_nodes:
-            self.emitter.echo(
-                "--- Giving newly created nodes some time to get ready ----")
-            with self.emitter.progressbar(range(0, 30), show_eta=False, show_percent=False) as bar:
-                for tick in bar:
-                    time.sleep(1)
-        self.emitter.echo(
-            'Running ansible deployment for all running nodes.', color='green')
-
-        if self.config.get('seed_network') is True and not self.config.get('seed_node'):
-            self.config['seed_node'] = list(self.config['instances'].values())[
-                0]['publicaddress']
-            self._write_config()
-
-        self.update_generate_inventory(
-            node_names, generate_keymaterial=True, migrate_nucypher=migrate_nucypher, init=init)
-
-        loader = DataLoader()
-        inventory = InventoryManager(
-            loader=loader, sources=self.inventory_path)
-        callback = AnsiblePlayBookResultsCollector(
-            sock=self.emitter, return_results=self.output_capture)
-        variable_manager = VariableManager(loader=loader, inventory=inventory)
-
-        executor = PlaybookExecutor(
-            playbooks=[playbook],
-            inventory=inventory,
-            variable_manager=variable_manager,
-            loader=loader,
-            passwords=dict(),
-        )
-        executor._tqm._stdout_callback = callback
-        executor.run()
-
-        for k in node_names:
-            installed = self.config['instances'][k].get('installed', [])
-            installed = list(set(installed + [self.application]))
-            self.config['instances'][k]['installed'] = installed
-        self._write_config()
-
-        self.update_captured_instance_data(self.output_capture)
-        self.give_helpful_hints(node_names, backup=True, playbook=playbook)
-
-    def update_nucypher_on_existing_nodes(self, node_names):
-
-        playbook = Path(PLAYBOOKS).joinpath('update_remote_workers.yml')
-
-        self.configure_host_level_overrides(node_names)
-
-        if self.config.get('seed_network') is True and not self.config.get('seed_node'):
-            self.config['seed_node'] = list(self.config['instances'].values())[
-                0]['publicaddress']
-            self._write_config()
-
-        self.update_generate_inventory(node_names)
-
-        loader = DataLoader()
-        inventory = InventoryManager(
-            loader=loader, sources=self.inventory_path)
-        callback = AnsiblePlayBookResultsCollector(
-            sock=self.emitter, return_results=self.output_capture)
-        variable_manager = VariableManager(loader=loader, inventory=inventory)
-
-        executor = PlaybookExecutor(
-            playbooks=[playbook],
-            inventory=inventory,
-            variable_manager=variable_manager,
-            loader=loader,
-            passwords=dict(),
-        )
-        executor._tqm._stdout_callback = callback
-        executor.run()
-
-        self.update_captured_instance_data(self.output_capture)
-        self.give_helpful_hints(node_names, backup=True, playbook=playbook)
-
-    def get_worker_status(self, node_names, fast=False):
-
-        playbook = Path(PLAYBOOKS).joinpath('get_workers_status.yml')
-        if not fast:
-            self.update_generate_inventory(node_names)
-
-            loader = DataLoader()
-            inventory = InventoryManager(
-                loader=loader, sources=self.inventory_path)
-            callback = AnsiblePlayBookResultsCollector(sock=self.emitter, return_results=self.output_capture, filter_output=[
-                "Print Ursula Status Data", "Print Last Log Line"])
-            variable_manager = VariableManager(
-                loader=loader, inventory=inventory)
-
-            executor = PlaybookExecutor(
-                playbooks=[playbook],
-                inventory=inventory,
-                variable_manager=variable_manager,
-                loader=loader,
-                passwords=dict(),
-            )
-            executor._tqm._stdout_callback = callback
-            executor.run()
-            self.update_captured_instance_data(self.output_capture)
-
-        self.give_helpful_hints(node_names, playbook=playbook)
-
-    def print_worker_logs(self, node_names):
-
-        playbook = Path(PLAYBOOKS).joinpath('get_worker_logs.yml')
-
-        self.update_generate_inventory(node_names)
-
-        loader = DataLoader()
-        inventory = InventoryManager(
-            loader=loader, sources=self.inventory_path)
-        callback = AnsiblePlayBookResultsCollector(
-            sock=self.emitter, return_results=self.output_capture)
-        variable_manager = VariableManager(loader=loader, inventory=inventory)
-
-        executor = PlaybookExecutor(
-            playbooks=[playbook],
-            inventory=inventory,
-            variable_manager=variable_manager,
-            loader=loader,
-            passwords=dict(),
-        )
-        executor._tqm._stdout_callback = callback
-        executor.run()
-        self.update_captured_instance_data(self.output_capture)
-
-        self.give_helpful_hints(node_names, playbook=playbook)
-
-    def backup_remote_data(self, node_names):
-
-        playbook = Path(PLAYBOOKS).joinpath('backup_remote_workers.yml')
-        self.update_generate_inventory(node_names)
-
-        loader = DataLoader()
-        inventory = InventoryManager(
-            loader=loader, sources=self.inventory_path)
-        callback = AnsiblePlayBookResultsCollector(
-            sock=self.emitter, return_results=self.output_capture)
-        variable_manager = VariableManager(loader=loader, inventory=inventory)
-
-        executor = PlaybookExecutor(
-            playbooks=[playbook],
-            inventory=inventory,
-            variable_manager=variable_manager,
-            loader=loader,
-            passwords=dict(),
-        )
-        executor._tqm._stdout_callback = callback
-        executor.run()
-
-        self.give_helpful_hints(node_names, backup=True, playbook=playbook)
-
-    def stop_worker_process(self, node_names):
-
-        playbook = Path(PLAYBOOKS).joinpath('stop_remote_workers.yml')
-        self.update_generate_inventory(node_names)
-
-        loader = DataLoader()
-        inventory = InventoryManager(
-            loader=loader, sources=self.inventory_path)
-        callback = AnsiblePlayBookResultsCollector(
-            sock=self.emitter, return_results=self.output_capture)
-        variable_manager = VariableManager(loader=loader, inventory=inventory)
-
-        executor = PlaybookExecutor(
-            playbooks=[playbook],
-            inventory=inventory,
-            variable_manager=variable_manager,
-            loader=loader,
-            passwords=dict(),
-        )
-        executor._tqm._stdout_callback = callback
-        executor.run()
-
-        self.give_helpful_hints(node_names, playbook=playbook)
-
-    def restore_from_backup(self, target_host, source_path):
-
-        playbook = Path(PLAYBOOKS).joinpath('restore_ursula_from_backup.yml')
-
-        self.update_generate_inventory([target_host], restore_path=source_path)
-
-        loader = DataLoader()
-        inventory = InventoryManager(
-            loader=loader, sources=self.inventory_path)
-        callback = AnsiblePlayBookResultsCollector(
-            sock=self.emitter, return_results=self.output_capture)
-        variable_manager = VariableManager(loader=loader, inventory=inventory)
-
-        executor = PlaybookExecutor(
-            playbooks=[playbook],
-            inventory=inventory,
-            variable_manager=variable_manager,
-            loader=loader,
-            passwords=dict(),
-        )
-        executor._tqm._stdout_callback = callback
-        executor.run()
-        self.give_helpful_hints([target_host], backup=True, playbook=playbook)
 
     def get_provider_hosts(self):
         return [
@@ -828,30 +606,6 @@ class BaseCloudNodeConfigurator:
         wallet = keygen.generate()
         self.config['keystoremnemonic'] = wallet.mnemonic()
         self.alert_new_mnemonic(wallet)
-
-    def migrate_5_6(self):
-        for index, instance in enumerate(self.config['instances'].keys()):
-            if not self.config['instances'][instance].get('index'):
-                self.config['instances'][instance]['index'] = index
-            if instance.runtime_envvars.get('NUCYPHER_WORKER_ETH_PASSWORD'):
-                instance.runtime_envvars['NUCYPHER_OPERATOR_ETH_PASSWORD'] = instance.runtime_envvars.get(
-                    'NUCYPHER_WORKER_ETH_PASSWORD')
-                del instance.runtime_envvars['NUCYPHER_WORKER_ETH_PASSWORD']
-
-        if self.config.get('keyringpassword'):
-            self.config['keystorepassword'] = self.config.get(
-                'keyringpassword')
-        if not self.config.get('keystoremnemonic'):
-            self.new_mnemonic()
-        self._write_config()
-
-    def migrate(self, current=5, target=6):
-        migration = f'migrate_{current}_{target}'
-        if hasattr(self, migration):
-            return getattr(self, migration)()
-
-        self.emitter.echo(
-            f" *** Error:  Couldn't find migration from {current} to {target} ***", color="red")
 
     def remove_resources(self, hostnames):
         for host in hostnames:
@@ -1829,6 +1583,251 @@ class tBTCv2Deployer(GenericDeployer):
         # override function to not automatically include `--network <value>`
         return ' '.join([f'--{name} {value}' for name, value in node_options.items()])
 
+class UrsulaDeployer(GenericDeployer):
+    application = 'ursula'
+
+    required_fields = [
+        'eth_provider',
+        'payment_provider',
+        'docker_image',
+        'payment_network'
+    ]
+
+    host_level_override_prompts = {
+        'eth_provider': {
+            "prompt": "--eth-provider: please provide the url of a hosted ethereum node (infura/geth) which your nodes can access",
+            "choices": None},
+        'payment_provider': {
+            "prompt": "--payment-provider: please provide the url of a hosted level-two node (infura/bor) which your nodes can access",
+            "choices": None},
+        'payment_network': {
+            "prompt": f'--payment-network:  choose a payment network from: {PAYMENT_NETWORK_CHOICES}',
+            "choices": PAYMENT_NETWORKS},
+    }
+
+    output_capture = {
+        'operator address': [],
+        'rest url': [],
+        'nucypher version': [],
+        'nickname': []
+    }
+
+    @property
+    def user(self) -> str:
+        return 'nucypher'
+
+    def migrate_5_6(self):
+        for index, instance in enumerate(self.config['instances'].keys()):
+            if not self.config['instances'][instance].get('index'):
+                self.config['instances'][instance]['index'] = index
+            if instance.runtime_envvars.get('NUCYPHER_WORKER_ETH_PASSWORD'):
+                instance.runtime_envvars['NUCYPHER_OPERATOR_ETH_PASSWORD'] = instance.runtime_envvars.get(
+                    'NUCYPHER_WORKER_ETH_PASSWORD')
+                del instance.runtime_envvars['NUCYPHER_WORKER_ETH_PASSWORD']
+
+        if self.config.get('keyringpassword'):
+            self.config['keystorepassword'] = self.config.get(
+                'keyringpassword')
+        if not self.config.get('keystoremnemonic'):
+            self.new_mnemonic()
+        self._write_config()
+
+    def migrate(self, current=5, target=6):
+        migration = f'migrate_{current}_{target}'
+        if hasattr(self, migration):
+            return getattr(self, migration)()
+
+        self.emitter.echo(
+            f" *** Error:  Couldn't find migration from {current} to {target} ***", color="red")
+
+    def deploy_nucypher(self, node_names, migrate_nucypher=False, init=False, **kwargs):
+        if migrate_nucypher or init:
+            keep_going = self.emitter.prompt(
+                "Proceeding with this operation will delete information from your nodes including wallets and keys.  Are you sure? (type 'yes')") == 'yes'
+            if init:
+                keep_going = self.emitter.prompt(
+                    "Proceeding with this operation will delete your node's eth wallet so make sure it does not posses any significant funds... Are you sure? (type 'yes')") == 'yes'
+            if not keep_going:
+                return
+            if migrate_nucypher:
+                self.migrate(**kwargs)
+
+        playbook = Path(PLAYBOOKS).joinpath('setup_ursula.yml')
+
+        self.configure_host_level_overrides(node_names)
+
+        if self.created_new_nodes:
+            self.emitter.echo(
+                "--- Giving newly created nodes some time to get ready ----")
+            with self.emitter.progressbar(range(0, 30), show_eta=False, show_percent=False) as bar:
+                for tick in bar:
+                    time.sleep(1)
+        self.emitter.echo(
+            'Running ansible deployment for all running nodes.', color='green')
+
+        if self.config.get('seed_network') is True and not self.config.get('seed_node'):
+            self.config['seed_node'] = list(self.config['instances'].values())[
+                0]['publicaddress']
+            self._write_config()
+
+        self.update_generate_inventory(
+            node_names, generate_keymaterial=True, migrate_nucypher=migrate_nucypher, init=init)
+
+        loader = DataLoader()
+        inventory = InventoryManager(
+            loader=loader, sources=self.inventory_path)
+        callback = AnsiblePlayBookResultsCollector(
+            sock=self.emitter, return_results=self.output_capture)
+        variable_manager = VariableManager(loader=loader, inventory=inventory)
+
+        executor = PlaybookExecutor(
+            playbooks=[playbook],
+            inventory=inventory,
+            variable_manager=variable_manager,
+            loader=loader,
+            passwords=dict(),
+        )
+        executor._tqm._stdout_callback = callback
+        executor.run()
+
+        for k in node_names:
+            installed = self.config['instances'][k].get('installed', [])
+            installed = list(set(installed + [self.application]))
+            self.config['instances'][k]['installed'] = installed
+        self._write_config()
+
+        self.update_captured_instance_data(self.output_capture)
+        self.give_helpful_hints(node_names, backup=True, playbook=playbook)
+
+    def update_nucypher(self, node_names):
+        playbook = Path(PLAYBOOKS).joinpath('update_ursula.yml')
+
+        self.configure_host_level_overrides(node_names)
+
+        if self.config.get('seed_network') is True and not self.config.get('seed_node'):
+            self.config['seed_node'] = list(self.config['instances'].values())[
+                0]['publicaddress']
+            self._write_config()
+
+        self.update_generate_inventory(node_names)
+
+        loader = DataLoader()
+        inventory = InventoryManager(
+            loader=loader, sources=self.inventory_path)
+        callback = AnsiblePlayBookResultsCollector(
+            sock=self.emitter, return_results=self.output_capture)
+        variable_manager = VariableManager(loader=loader, inventory=inventory)
+
+        executor = PlaybookExecutor(
+            playbooks=[playbook],
+            inventory=inventory,
+            variable_manager=variable_manager,
+            loader=loader,
+            passwords=dict(),
+        )
+        executor._tqm._stdout_callback = callback
+        executor.run()
+
+        self.update_captured_instance_data(self.output_capture)
+        self.give_helpful_hints(node_names, backup=True, playbook=playbook)
+
+    def get_ursula_status(self, node_names, fast=False):
+        playbook = Path(PLAYBOOKS).joinpath('get_ursula_status.yml')
+        if not fast:
+            self.update_generate_inventory(node_names)
+
+            loader = DataLoader()
+            inventory = InventoryManager(
+                loader=loader, sources=self.inventory_path)
+            callback = AnsiblePlayBookResultsCollector(sock=self.emitter, return_results=self.output_capture, filter_output=[
+                "Print Ursula Status Data", "Print Last Log Line"])
+            variable_manager = VariableManager(
+                loader=loader, inventory=inventory)
+
+            executor = PlaybookExecutor(
+                playbooks=[playbook],
+                inventory=inventory,
+                variable_manager=variable_manager,
+                loader=loader,
+                passwords=dict(),
+            )
+            executor._tqm._stdout_callback = callback
+            executor.run()
+            self.update_captured_instance_data(self.output_capture)
+
+        self.give_helpful_hints(node_names, playbook=playbook)
+
+    def backup_ursula_data(self, node_names):
+        playbook = Path(PLAYBOOKS).joinpath('backup_ursula.yml')
+        self.update_generate_inventory(node_names)
+
+        loader = DataLoader()
+        inventory = InventoryManager(
+            loader=loader, sources=self.inventory_path)
+        callback = AnsiblePlayBookResultsCollector(
+            sock=self.emitter, return_results=self.output_capture)
+        variable_manager = VariableManager(loader=loader, inventory=inventory)
+
+        executor = PlaybookExecutor(
+            playbooks=[playbook],
+            inventory=inventory,
+            variable_manager=variable_manager,
+            loader=loader,
+            passwords=dict(),
+        )
+        executor._tqm._stdout_callback = callback
+        executor.run()
+
+        self.give_helpful_hints(node_names, backup=True, playbook=playbook)
+
+    def stop_ursula(self, node_names):
+
+        playbook = Path(PLAYBOOKS).joinpath('stop_ursula.yml')
+        self.update_generate_inventory(node_names)
+
+        loader = DataLoader()
+        inventory = InventoryManager(
+            loader=loader, sources=self.inventory_path)
+        callback = AnsiblePlayBookResultsCollector(
+            sock=self.emitter, return_results=self.output_capture)
+        variable_manager = VariableManager(loader=loader, inventory=inventory)
+
+        executor = PlaybookExecutor(
+            playbooks=[playbook],
+            inventory=inventory,
+            variable_manager=variable_manager,
+            loader=loader,
+            passwords=dict(),
+        )
+        executor._tqm._stdout_callback = callback
+        executor.run()
+
+        self.give_helpful_hints(node_names, playbook=playbook)
+
+    def restore_ursula_from_backup(self, target_host, source_path):
+
+        playbook = Path(PLAYBOOKS).joinpath('restore_ursula_from_backup.yml')
+
+        self.update_generate_inventory([target_host], restore_path=source_path)
+
+        loader = DataLoader()
+        inventory = InventoryManager(
+            loader=loader, sources=self.inventory_path)
+        callback = AnsiblePlayBookResultsCollector(
+            sock=self.emitter, return_results=self.output_capture)
+        variable_manager = VariableManager(loader=loader, inventory=inventory)
+
+        executor = PlaybookExecutor(
+            playbooks=[playbook],
+            inventory=inventory,
+            variable_manager=variable_manager,
+            loader=loader,
+            passwords=dict(),
+        )
+        executor._tqm._stdout_callback = callback
+        executor.run()
+        self.give_helpful_hints([target_host], backup=True, playbook=playbook)
+
 
 class EthDeployer(GenericDeployer):
 
@@ -1863,6 +1862,7 @@ class CloudDeployers:
     digitalocean = DigitalOceanConfigurator
     generic = GenericConfigurator
     porter = PorterDeployer
+    ursula = UrsulaDeployer
     ethereum = EthDeployer
     tbtcv2 = tBTCv2Deployer
 
