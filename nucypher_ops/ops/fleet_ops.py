@@ -71,6 +71,8 @@ class BaseCloudNodeConfigurator(ABC):
 
     required_fields = []
 
+    provider_name = NotImplemented
+
     def __init__(self,  # TODO: Add type annotations
                  emitter,
                  recovery_mode=False,
@@ -1287,12 +1289,14 @@ class GenericConfigurator(BaseCloudNodeConfigurator):
 
 class GenericDeployer(BaseCloudNodeConfigurator):
 
+    application = NotImplemented
+    output_capture = {}
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def deploy(self, node_names):
-
-        playbook = Path(PLAYBOOKS).joinpath(self.playbook_name)
+    def deploy(self, node_names, playbook_name):
+        playbook = Path(PLAYBOOKS).joinpath(playbook_name)
         self.configure_host_level_overrides(node_names)
 
         self.update_generate_inventory(node_names)
@@ -1386,7 +1390,6 @@ class GenericDeployer(BaseCloudNodeConfigurator):
 
 class PorterDeployer(GenericDeployer):
 
-    playbook_name = 'setup_porter.yml'
     application = 'porter'
     required_fields = [
         'eth_provider',
@@ -1395,8 +1398,6 @@ class PorterDeployer(GenericDeployer):
     host_level_override_prompts = {
         'eth_provider': {"prompt": "--eth-provider: please provide the url of a hosted ethereum node (infura/geth) which this porter node can access", "choices": None},
     }
-
-    output_capture = {}
 
     @property
     def user(self) -> str:
@@ -1418,6 +1419,10 @@ class PorterDeployer(GenericDeployer):
     def inventory_path(self):
         return str(Path(DEFAULT_CONFIG_ROOT).joinpath(NODE_CONFIG_STORAGE_KEY, f'{self.namespace_network}.porter_ansible_inventory.yml'))
 
+    def deploy_porter(self, node_names):
+        playbook_name = 'setup_porter.yml'
+        super().deploy(node_names=node_names, playbook_name=playbook_name)
+
 
 class tBTCv2Deployer(GenericDeployer):
 
@@ -1429,8 +1434,6 @@ class tBTCv2Deployer(GenericDeployer):
     host_level_override_prompts = {
         'eth_provider': {"prompt": "--eth-provider: please provide the websocket url of an ethereum node", "choices": None},
     }
-
-    output_capture = {}
 
     @property
     def user(self) -> str:
@@ -1461,27 +1464,27 @@ class tBTCv2Deployer(GenericDeployer):
         return f'{self.config_dir}/remote_operator_backups/'
 
     def stage_nodes(self, *args, **kwargs):
-        self.playbook_name = "stage_tbtcv2.yml"
+        playbook_name = "stage_tbtcv2.yml"
         try:
             self.output_capture = {
                 'operator address': [],
             }
-            return super().deploy(*args, **kwargs)
+            return super().deploy(playbook_name=playbook_name, *args, **kwargs)
         finally:
             # only capture output during `tbtcv2 stage`
             self.output_capture = {}
 
     def run_nodes(self, *args, **kwargs):
-        self.playbook_name = "run_tbtcv2.yml"
-        return super().deploy(*args, **kwargs)
+        playbook_name = "run_tbtcv2.yml"
+        return super().deploy(playbook_name=playbook_name, *args, **kwargs)
 
     def stop_nodes(self, *args, **kwargs):
-        self.playbook_name = "include/stop_tbtcv2_nodes.yml"
-        return super().deploy(*args, **kwargs)
+        playbook_name = "include/stop_tbtcv2_nodes.yml"
+        return super().deploy(playbook_name=playbook_name, *args, **kwargs)
 
     def get_operator_address(self, *args, **kwargs):
-        self.playbook_name = "include/get_operator_address.yml"
-        return super().deploy(*args, **kwargs)
+        playbook_name = "include/get_operator_address.yml"
+        return super().deploy(playbook_name=playbook_name * args, **kwargs)
 
     def _format_runtime_options(self, node_options):
         # override function to not automatically include `--network <value>`
@@ -1665,10 +1668,6 @@ class UrsulaDeployer(GenericDeployer):
             if migrate_nucypher:
                 self.migrate(**kwargs)
 
-        playbook = Path(PLAYBOOKS).joinpath('setup_ursula.yml')
-
-        self.configure_host_level_overrides(node_names)
-
         if self.created_new_nodes:
             self.emitter.echo(
                 "--- Giving newly created nodes some time to get ready ----")
@@ -1683,66 +1682,17 @@ class UrsulaDeployer(GenericDeployer):
                 0]['publicaddress']
             self._write_config()
 
-        self.update_generate_inventory(
-            node_names, generate_keymaterial=True, migrate_nucypher=migrate_nucypher, init=init)
-
-        loader = DataLoader()
-        inventory = InventoryManager(
-            loader=loader, sources=self.inventory_path)
-        callback = AnsiblePlayBookResultsCollector(
-            sock=self.emitter, return_results=self.output_capture)
-        variable_manager = VariableManager(loader=loader, inventory=inventory)
-
-        executor = PlaybookExecutor(
-            playbooks=[playbook],
-            inventory=inventory,
-            variable_manager=variable_manager,
-            loader=loader,
-            passwords=dict(),
-        )
-        executor._tqm._stdout_callback = callback
-        executor.run()
-
-        for k in node_names:
-            installed = self.config['instances'][k].get('installed', [])
-            installed = list(set(installed + [self.application]))
-            self.config['instances'][k]['installed'] = installed
-        self._write_config()
-
-        self.update_captured_instance_data(self.output_capture)
-        self.give_helpful_hints(node_names, backup=True, playbook=playbook)
+        playbook_name = "setup_ursula.yml"
+        super().deploy(node_names=node_names, playbook_name=playbook_name)
 
     def update_nucypher(self, node_names):
-        playbook = Path(PLAYBOOKS).joinpath('update_ursula.yml')
-
-        self.configure_host_level_overrides(node_names)
-
         if self.config.get('seed_network') is True and not self.config.get('seed_node'):
             self.config['seed_node'] = list(self.config['instances'].values())[
                 0]['publicaddress']
             self._write_config()
 
-        self.update_generate_inventory(node_names)
-
-        loader = DataLoader()
-        inventory = InventoryManager(
-            loader=loader, sources=self.inventory_path)
-        callback = AnsiblePlayBookResultsCollector(
-            sock=self.emitter, return_results=self.output_capture)
-        variable_manager = VariableManager(loader=loader, inventory=inventory)
-
-        executor = PlaybookExecutor(
-            playbooks=[playbook],
-            inventory=inventory,
-            variable_manager=variable_manager,
-            loader=loader,
-            passwords=dict(),
-        )
-        executor._tqm._stdout_callback = callback
-        executor.run()
-
-        self.update_captured_instance_data(self.output_capture)
-        self.give_helpful_hints(node_names, backup=True, playbook=playbook)
+        playbook_name = 'update_ursula.yml'
+        super().deploy(node_names=node_names, playbook_name=playbook_name)
 
     def get_ursula_status(self, node_names, fast=False):
         playbook = Path(PLAYBOOKS).joinpath('get_ursula_status.yml')
@@ -1771,80 +1721,22 @@ class UrsulaDeployer(GenericDeployer):
         self.give_helpful_hints(node_names, playbook=playbook)
 
     def backup_ursula_data(self, node_names):
-        playbook = Path(PLAYBOOKS).joinpath('backup_ursula.yml')
-        self.update_generate_inventory(node_names)
+        playbook_name = 'backup_ursula.yml'
+        super().deploy(node_names=node_names, playbook_name=playbook_name)
 
-        loader = DataLoader()
-        inventory = InventoryManager(
-            loader=loader, sources=self.inventory_path)
-        callback = AnsiblePlayBookResultsCollector(
-            sock=self.emitter, return_results=self.output_capture)
-        variable_manager = VariableManager(loader=loader, inventory=inventory)
-
-        executor = PlaybookExecutor(
-            playbooks=[playbook],
-            inventory=inventory,
-            variable_manager=variable_manager,
-            loader=loader,
-            passwords=dict(),
-        )
-        executor._tqm._stdout_callback = callback
-        executor.run()
-
-        self.give_helpful_hints(node_names, backup=True, playbook=playbook)
 
     def stop_ursula(self, node_names):
-
-        playbook = Path(PLAYBOOKS).joinpath('stop_ursula.yml')
-        self.update_generate_inventory(node_names)
-
-        loader = DataLoader()
-        inventory = InventoryManager(
-            loader=loader, sources=self.inventory_path)
-        callback = AnsiblePlayBookResultsCollector(
-            sock=self.emitter, return_results=self.output_capture)
-        variable_manager = VariableManager(loader=loader, inventory=inventory)
-
-        executor = PlaybookExecutor(
-            playbooks=[playbook],
-            inventory=inventory,
-            variable_manager=variable_manager,
-            loader=loader,
-            passwords=dict(),
-        )
-        executor._tqm._stdout_callback = callback
-        executor.run()
-
-        self.give_helpful_hints(node_names, playbook=playbook)
+        playbook_name = 'stop_ursula.yml'
+        super().deploy(node_names=node_names, playbook_name=playbook_name)
 
     def restore_ursula_from_backup(self, target_host, source_path):
-
-        playbook = Path(PLAYBOOKS).joinpath('restore_ursula_from_backup.yml')
-
         self.update_generate_inventory([target_host], restore_path=source_path)
-
-        loader = DataLoader()
-        inventory = InventoryManager(
-            loader=loader, sources=self.inventory_path)
-        callback = AnsiblePlayBookResultsCollector(
-            sock=self.emitter, return_results=self.output_capture)
-        variable_manager = VariableManager(loader=loader, inventory=inventory)
-
-        executor = PlaybookExecutor(
-            playbooks=[playbook],
-            inventory=inventory,
-            variable_manager=variable_manager,
-            loader=loader,
-            passwords=dict(),
-        )
-        executor._tqm._stdout_callback = callback
-        executor.run()
-        self.give_helpful_hints([target_host], backup=True, playbook=playbook)
+        playbook_name = 'restore_ursula_from_backup.yml'
+        super().deploy(node_names=[target_host], playbook_name=playbook_name)
 
 
 class EthDeployer(GenericDeployer):
 
-    playbook_name = 'setup_standalone_geth_node.yml'
     application = 'ethereum'
     required_fields = [
         'docker_image',
@@ -1853,7 +1745,6 @@ class EthDeployer(GenericDeployer):
         # 'eth_provider': {"prompt": "--eth-provider: please provide the url of a hosted ethereum node (infura/geth) which this porter node can access", "choices": None},
     }
 
-    output_capture = {}
 
     @property
     def _inventory_template(self):
@@ -1867,6 +1758,10 @@ class EthDeployer(GenericDeployer):
     @property
     def user(self) -> str:
         return 'ethereum'
+
+    def deploy_geth(self, node_names):
+        playbook_name = 'setup_standalone_geth_node.yml'
+        super().deploy(node_names=node_names, playbook_name=playbook_name)
 
 
 class CloudDeployers:
