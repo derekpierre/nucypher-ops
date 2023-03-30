@@ -1463,32 +1463,33 @@ class tBTCv2Deployer(GenericDeployer):
     def backup_directory(self):
         return f'{self.config_dir}/remote_operator_backups/'
 
-    def stage_nodes(self, *args, **kwargs):
+    def stage_nodes(self, node_names):
         playbook_name = "stage_tbtcv2.yml"
         try:
             self.output_capture = {
                 'operator address': [],
             }
-            return super().deploy(playbook_name=playbook_name, *args, **kwargs)
+            return super().deploy(node_names=node_names, playbook_name=playbook_name)
         finally:
             # only capture output during `tbtcv2 stage`
             self.output_capture = {}
 
-    def run_nodes(self, *args, **kwargs):
+    def run_nodes(self, node_names):
         playbook_name = "run_tbtcv2.yml"
-        return super().deploy(playbook_name=playbook_name, *args, **kwargs)
+        return super().deploy(node_names=node_names, playbook_name=playbook_name)
 
-    def stop_nodes(self, *args, **kwargs):
+    def stop_nodes(self, node_names):
         playbook_name = "include/stop_tbtcv2_nodes.yml"
-        return super().deploy(playbook_name=playbook_name, *args, **kwargs)
+        return super().deploy(node_names=node_names, playbook_name=playbook_name)
 
-    def get_operator_address(self, *args, **kwargs):
+    def get_operator_address(self, node_names):
         playbook_name = "include/get_operator_address.yml"
-        return super().deploy(playbook_name=playbook_name * args, **kwargs)
+        return super().deploy(node_names=node_names, playbook_name=playbook_name)
 
     def _format_runtime_options(self, node_options):
         # override function to not automatically include `--network <value>`
         return ' '.join([f'--{name} {value}' for name, value in node_options.items()])
+
 
 class UrsulaDeployer(GenericDeployer):
     application = 'ursula'
